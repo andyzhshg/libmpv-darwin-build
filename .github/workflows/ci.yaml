@@ -47,7 +47,7 @@ jobs:
             VERSION=${GITHUB_REF#refs/tags/}
             ;;
           *)
-            VERSION=vs
+            VERSION=vs1
             ;;
           esac
 

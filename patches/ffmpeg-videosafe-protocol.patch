@@ -1,43 +1,53 @@
-From acfcf892f16fc64ec5e775894185a6f3aa44bd03 Mon Sep 17 00:00:00 2001
+From f2a041789c82b136d58a66a8f1ff733527ccfaf5 Mon Sep 17 00:00:00 2001
 From: andyzhshg <andyzhshg@gmail.com>
-Date: Fri, 11 Jul 2025 17:10:24 +0800
-Subject: [PATCH] videosafe
+Date: Fri, 11 Jul 2025 18:36:21 +0800
+Subject: [PATCH] update
 
 ---
- libavformat/Makefile             |   3 +
- libavformat/protocols.c          |   3 +
- libavformat/videosafe_protocol.c | 195 +++++++++++++++++++++++++++++++
- 3 files changed, 201 insertions(+)
- create mode 100644 libavformat/videosafe_protocol.c
+ libavformat/Makefile    | 3 +++
+ libavformat/protocols.c | 2 ++
+ 2 files changed, 5 insertions(+)
 
 diff --git a/libavformat/Makefile b/libavformat/Makefile
-index 7ca68a7..9696738 100644
+index 47bbbbf..60a992c 100644
 --- a/libavformat/Makefile
 +++ b/libavformat/Makefile
-@@ -725,6 +725,9 @@ OBJS-$(CONFIG_LIBSRT_PROTOCOL)           += libsrt.o urldecode.o
+@@ -704,6 +704,9 @@ OBJS-$(CONFIG_LIBSRT_PROTOCOL)           += libsrt.o
  OBJS-$(CONFIG_LIBSSH_PROTOCOL)           += libssh.o
  OBJS-$(CONFIG_LIBZMQ_PROTOCOL)           += libzmq.o
  
-+# videosafe protocol
++# videosafe
 +OBJS-$(CONFIG_VIDEOSAFE_PROTOCOL) += videosafe_protocol.o
 +
  # Objects duplicated from other libraries for shared builds
  SHLIBOBJS                                += log2_tab.o to_upper4.o
  SHLIBOBJS-$(CONFIG_ISO_MEDIA)            += mpegaudiotabs.o
 diff --git a/libavformat/protocols.c b/libavformat/protocols.c
-index 93a6d67..8094cfc 100644
+index 9491dc7..9d8304d 100644
 --- a/libavformat/protocols.c
 +++ b/libavformat/protocols.c
-@@ -79,6 +79,9 @@ extern const URLProtocol ff_libzmq_protocol;
+@@ -76,6 +76,8 @@ extern const URLProtocol ff_libzmq_protocol;
  extern const URLProtocol ff_ipfs_gateway_protocol;
  extern const URLProtocol ff_ipns_gateway_protocol;
  
 +extern const URLProtocol ff_videosafe_protocol;
 +
-+
  #include "libavformat/protocol_list.c"
  
  const AVClass *ff_urlcontext_child_class_iterate(void **iter)
+-- 
+2.45.1
+
+From eb9507b9d49b59f719ae20ce6274249e0b5168f2 Mon Sep 17 00:00:00 2001
+From: andyzhshg <andyzhshg@gmail.com>
+Date: Fri, 11 Jul 2025 18:50:00 +0800
+Subject: [PATCH] update
+
+---
+ libavformat/videosafe_protocol.c | 195 +++++++++++++++++++++++++++++++
+ 1 file changed, 195 insertions(+)
+ create mode 100644 libavformat/videosafe_protocol.c
+
 diff --git a/libavformat/videosafe_protocol.c b/libavformat/videosafe_protocol.c
 new file mode 100644
 index 0000000..f552b45

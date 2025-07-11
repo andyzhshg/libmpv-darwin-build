@@ -1,19 +1,31 @@
 {
-    "editor.formatOnSave": true,
-    "[yaml]": {
-        "editor.defaultFormatter": "redhat.vscode-yaml"
-    },
-    "nix.serverPath": "nixd",
-    "nix.enableLanguageServer": true,
-    "nix.formatterPath": "nixfmt",
-    "nix.serverSettings": {
-        "nixd": {
-            "nixpkgs": {
-                "expr": "import <nixpkgs> { }",
-            },
-            "formatting": {
-                "command": [ "nixfmt" ],
-            },
-        }
+  "editor.formatOnSave": true,
+  "[yaml]": {
+    "editor.defaultFormatter": "redhat.vscode-yaml"
+  },
+  "nix.serverPath": "nixd",
+  "nix.enableLanguageServer": true,
+  "nix.formatterPath": "nixfmt",
+  "nix.serverSettings": {
+    "nixd": {
+      "nixpkgs": {
+        "expr": "import <nixpkgs> { }"
+      },
+      "formatting": {
+        "command": ["nixfmt"]
+      }
     }
+  },
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/.classpath": true,
+    "**/.factorypath": true,
+    "**/.project": true,
+    "**/.settings": true
+  },
+  "hide-files.files": []
 }
