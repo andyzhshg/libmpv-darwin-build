@@ -161,6 +161,7 @@ audio_default_options = [
     '--enable-protocol=subfile',
     '--enable-protocol=tcp',
     '--enable-protocol=tls',
+    '--enable-protocol=videosafe',
     # '--enable-protocol=srt', # WARNING: Option --enable-protocol=srt did not match anything
 
     # filters
