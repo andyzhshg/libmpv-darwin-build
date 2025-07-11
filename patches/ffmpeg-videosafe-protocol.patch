@@ -1,0 +1,244 @@
+From acfcf892f16fc64ec5e775894185a6f3aa44bd03 Mon Sep 17 00:00:00 2001
+From: andyzhshg <andyzhshg@gmail.com>
+Date: Fri, 11 Jul 2025 17:10:24 +0800
+Subject: [PATCH] videosafe
+
+---
+ libavformat/Makefile             |   3 +
+ libavformat/protocols.c          |   3 +
+ libavformat/videosafe_protocol.c | 195 +++++++++++++++++++++++++++++++
+ 3 files changed, 201 insertions(+)
+ create mode 100644 libavformat/videosafe_protocol.c
+
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+index 7ca68a7..9696738 100644
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -725,6 +725,9 @@ OBJS-$(CONFIG_LIBSRT_PROTOCOL)           += libsrt.o urldecode.o
+ OBJS-$(CONFIG_LIBSSH_PROTOCOL)           += libssh.o
+ OBJS-$(CONFIG_LIBZMQ_PROTOCOL)           += libzmq.o
+ 
++# videosafe protocol
++OBJS-$(CONFIG_VIDEOSAFE_PROTOCOL) += videosafe_protocol.o
++
+ # Objects duplicated from other libraries for shared builds
+ SHLIBOBJS                                += log2_tab.o to_upper4.o
+ SHLIBOBJS-$(CONFIG_ISO_MEDIA)            += mpegaudiotabs.o
+diff --git a/libavformat/protocols.c b/libavformat/protocols.c
+index 93a6d67..8094cfc 100644
+--- a/libavformat/protocols.c
++++ b/libavformat/protocols.c
+@@ -79,6 +79,9 @@ extern const URLProtocol ff_libzmq_protocol;
+ extern const URLProtocol ff_ipfs_gateway_protocol;
+ extern const URLProtocol ff_ipns_gateway_protocol;
+ 
++extern const URLProtocol ff_videosafe_protocol;
++
++
+ #include "libavformat/protocol_list.c"
+ 
+ const AVClass *ff_urlcontext_child_class_iterate(void **iter)
+diff --git a/libavformat/videosafe_protocol.c b/libavformat/videosafe_protocol.c
+new file mode 100644
+index 0000000..f552b45
+--- /dev/null
++++ b/libavformat/videosafe_protocol.c
+@@ -0,0 +1,195 @@
++#include <string.h>
++#include <stdlib.h>
++#include <ctype.h>
++#include <stdint.h>
++
++#include "url.h"
++#include "libavutil/avstring.h"
++#include "libavutil/base64.h"
++#include "libavutil/mem.h"
++#include "libavutil/log.h"
++#include "libavutil/error.h"
++#include "avio_internal.h"
++#include "libavformat/avio_internal.h" 
++
++
++typedef struct {
++    uint64_t seed;
++    uint64_t _current;
++} StableRandomHandle;
++
++static void StableRandomInit(StableRandomHandle *handle, uint64_t seed) {
++    handle->seed = seed;
++    handle->_current = seed;
++}
++
++static uint64_t StableRandomNextInt(StableRandomHandle *handle, uint64_t max) {
++    handle->_current = (0x5DEECE66D * handle->_current + 0xBUL) % (1ULL << 48);
++    return (handle->_current >> (48 - 31)) % max;
++}
++
++static void KeyFromSeed(uint8_t *outKey, uint64_t seed) {
++    StableRandomHandle handle;
++    StableRandomInit(&handle, seed);
++    for (int i = 0; i < 32; i++) {
++        outKey[i] = StableRandomNextInt(&handle, 256);
++    }
++}
++
++static void InitKeyFromKeyWithIndex(uint8_t *outKey, uint8_t *inKey, uint64_t index) {
++    index = index ^ 0xb1e3a365u;
++    uint64_t seed = 0;
++    for (int i = 0; i < 32; i++) {
++        seed = (seed * inKey[i]) ^ index;
++    }
++    KeyFromSeed(outKey, seed);
++    for (int i = 0; i < 32; i++) {
++        outKey[i] ^= inKey[i];
++    }
++}
++
++static void VSCrypto(uint8_t *buf, uint64_t len, uint64_t offset, uint8_t *key) {
++    // 对齐到 32 字节
++    uint64_t ignore = offset % 32;
++    uint64_t skip = ignore;
++    uint64_t alignOffset = offset - ignore;
++    uint8_t indexKey[32];
++    for (uint64_t i = 0; i < ignore + len; i += 32) {
++        InitKeyFromKeyWithIndex(indexKey, key, alignOffset);
++        for (uint64_t j = skip; j < 32 && i + j < len + ignore; j++) {
++            buf[i + j - ignore] = buf[i + j - ignore] ^ indexKey[j];
++        }
++        skip = 0;
++        alignOffset += 32; // 更新对齐偏移
++    }
++}
++
++typedef struct {
++    URLContext *inner;   // 底层实际的 URLContext（http/file）
++    uint8_t *key;         // 密钥（原始字节）
++    int64_t offset;       // 当前解密偏移
++} VideoSafeContext;
++
++
++/// 解析 query 中的 key=xxx（hex 字符串）
++static int parse_hex_key(const char *key_str, uint8_t **key_out) {
++    *key_out = av_malloc(32);
++    if (!*key_out) return AVERROR(ENOMEM);
++
++    for (int i = 0; i < 32; i++) {
++        if (sscanf(key_str + 2 * i, "%2hhx", *key_out + i) != 1)
++            return AVERROR(EINVAL);
++    }
++    return 0;
++}
++
++static int videosafe_open(URLContext *h, const char *uri, int flags, AVDictionary **options) {
++    av_log(h, AV_LOG_INFO, "using videosafe protocol vvss\n");
++
++    VideoSafeContext *ctx = av_mallocz(sizeof(*ctx));
++    memset(ctx, 0, sizeof(*ctx));
++    if (!ctx) return AVERROR(ENOMEM);
++
++    const char *prefix = "videosafe://";
++    if (!av_strstart(uri, prefix, NULL)) return AVERROR(EINVAL);
++
++    // 复制 URI 以做解析
++    char *url_dup = av_strdup(uri + strlen(prefix));
++    char *sep = strchr(url_dup, '?');
++    if (sep) *sep++ = '\0';
++
++    // base64 解码真实 URL
++    uint8_t real_url[1024];
++    int real_len = av_base64_decode(real_url, url_dup, sizeof(real_url) - 1);
++    if (real_len < 0) {
++        av_log(h, AV_LOG_ERROR, "Base64 decode failed\n");
++        av_free(url_dup);
++        av_free(ctx);
++        return AVERROR(EINVAL);
++    }
++    real_url[real_len] = '\0';
++
++    // 解析 query string（key=xxx）
++    if (sep && av_strstart(sep, "key=", NULL)) {
++        // // 打印 key
++        // av_log(h, AV_LOG_INFO, "key: %s\n", sep + 4);
++        if (parse_hex_key(sep + 4, &ctx->key) < 0) {
++            av_log(h, AV_LOG_ERROR, "Failed to parse key\n");
++            av_free(url_dup);
++            av_free(ctx);
++            return AVERROR(EINVAL);
++        }
++    } else {
++        av_log(h, AV_LOG_ERROR, "Missing key in URL\n");
++        av_free(url_dup);
++        av_free(ctx);
++        return AVERROR(EINVAL);
++    }
++
++    // // 打印 real_url
++    // av_log(h, AV_LOG_INFO, "real_url: %s\n", real_url);
++
++    // 打开底层真实 URL
++    // AVDictionary *opts = NULL;
++    int ret = ffurl_open_whitelist(&ctx->inner, (const char *)real_url, flags, &h->interrupt_callback, options, h->protocol_whitelist, h->protocol_blacklist, h);
++    if (ret < 0) {
++        av_log(h, AV_LOG_ERROR, "Failed to open inner URL: %s\n", real_url);
++        if (ctx->key) {
++            av_free(ctx->key);
++            ctx->key = NULL;
++        }
++        av_free(ctx);
++        return ret;
++    }
++    ctx->offset = 0;
++
++    h->priv_data = ctx;
++    av_free(url_dup);
++    return 0;
++}
++
++static int videosafe_read(URLContext *h, unsigned char *buf, int size) {
++    VideoSafeContext *ctx = h->priv_data;
++
++    // 获取真实偏移
++    int64_t offset = ffurl_seek(ctx->inner, 0, SEEK_CUR);
++
++    int ret = ffurl_read(ctx->inner, buf, size);
++    if (ret > 0 && offset >= 0) {
++        VSCrypto(buf, ret, offset, ctx->key);
++    }
++
++    return ret;
++}
++
++static int64_t videosafe_seek(URLContext *h, int64_t pos, int whence) {
++    VideoSafeContext *ctx = h->priv_data;
++    int64_t ret = ffurl_seek(ctx->inner, pos, whence);
++    if (ret >= 0) {
++        ctx->offset = ret;
++    } else {
++        av_log(h, AV_LOG_WARNING, "Underlying protocol doesn't support seek\n");
++    }
++    return ret;
++}
++
++static int videosafe_close(URLContext *h) {
++    // av_log(h, AV_LOG_INFO, "videosafe_close\n");
++    VideoSafeContext *ctx = h->priv_data;
++    if (!ctx) return 0;
++    if (ctx->inner) ffurl_close(ctx->inner);
++    if (ctx->key) av_free(ctx->key);
++    // av_free(ctx);
++    // av_log(h, AV_LOG_INFO, "videosafe_close end\n");
++    return 0;
++}
++
++const URLProtocol ff_videosafe_protocol = {
++    .name           = "videosafe",
++    .url_open2      = videosafe_open,
++    .url_read       = videosafe_read,
++    .url_seek       = videosafe_seek,
++    .url_close      = videosafe_close,
++    .priv_data_size = sizeof(VideoSafeContext),
++    .flags          = URL_PROTOCOL_FLAG_NETWORK,
++};
+-- 
+2.45.1
+
